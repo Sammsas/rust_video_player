@@ -11,7 +11,7 @@ on:
       gstreamer_version:
         description: "GStreamer version to install"
         required: false
-        default: "1.28.3"
+        default: "1.24.12"
       create_release:
         description: "Create or update GitHub Release when running manually"
         required: false
@@ -81,7 +81,8 @@ jobs:
             -Version "${env:GST_VERSION}" `
             -InstallRoot "${env:GST_ROOT}" `
             -CacheDir "C:\downloads" `
-            -ExportGitHubEnv
+            -InstallerKind "Msi" `
+            -TimeoutSeconds 900
 
       - name: Verify GStreamer plugins
         shell: pwsh
