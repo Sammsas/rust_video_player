@@ -1,0 +1,12 @@
+Third Party Notices
+===================
+
+This application may distribute or dynamically load third-party components,
+including but not limited to GStreamer, GStreamer plugins, FFmpeg/libav components
+through gst-libav, and Rust crates listed in Cargo.toml / Cargo.lock.
+
+Before public or commercial distribution, verify the exact licenses of the
+components you ship. Keep original license files from the GStreamer distribution
+and include them in this licenses directory.
+
+This file is a template, not legal advice.

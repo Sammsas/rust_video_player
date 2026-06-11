@@ -1,0 +1,150 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      gstreamer_version:
+        description: "GStreamer version to install"
+        required: false
+        default: "1.28.3"
+      create_release:
+        description: "Create or update GitHub Release when running manually"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_NAME: RustVideoPlayer
+  PACKAGE_NAME: RustVideoPlayer-windows-x64
+  GST_ROOT: "C:\\gstreamer\\1.0\\msvc_x86_64"
+
+jobs:
+  build-windows-x64:
+    name: Build Windows x64
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Resolve build variables
+        shell: pwsh
+        run: |
+          $gstVersion = "${{ github.event.inputs.gstreamer_version }}"
+          if ([string]::IsNullOrWhiteSpace($gstVersion)) { $gstVersion = "1.28.3" }
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          "GST_VERSION=$gstVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "SHORT_SHA=$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "GST_VERSION=$gstVersion"
+
+      - name: Show toolchain versions
+        shell: pwsh
+        run: |
+          rustc --version
+          cargo --version
+          rustup --version
+          gh --version
+
+      - name: Cache Cargo registry and build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            windows-cargo-${{ runner.os }}-
+
+      - name: Cache GStreamer installer directory
+        uses: actions/cache@v4
+        with:
+          path: C:\downloads
+          key: gstreamer-downloads-${{ env.GST_VERSION }}
+
+      - name: Install GStreamer MSVC x64
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\install_gstreamer_windows.ps1 `
+            -Version "${env:GST_VERSION}" `
+            -InstallRoot "${env:GST_ROOT}" `
+            -CacheDir "C:\downloads" `
+            -ExportGitHubEnv
+
+      - name: Verify GStreamer plugins
+        shell: pwsh
+        run: |
+          gst-inspect-1.0 --version
+          gst-inspect-1.0 playbin
+          gst-inspect-1.0 appsink
+          gst-inspect-1.0 videoconvert
+          powershell -ExecutionPolicy Bypass -File scripts\check_gstreamer.ps1 -GStreamerRoot "${env:GST_ROOT}"
+
+      - name: Build and package application
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts\package_windows.ps1 `
+            -GStreamerRoot "${env:GST_ROOT}" `
+            -OutputDir "dist\RustVideoPlayer" `
+            -AppExeName "RustVideoPlayer.exe"
+
+      - name: Create ZIP package and SHA256 checksum
+        shell: pwsh
+        run: |
+          $zip = "${env:PACKAGE_NAME}.zip"
+          $sha = "$zip.sha256"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          if (Test-Path $sha) { Remove-Item $sha -Force }
+          Compress-Archive -Path "dist\RustVideoPlayer\*" -DestinationPath $zip -Force
+          $hash = Get-FileHash -Algorithm SHA256 $zip
+          "$($hash.Hash)  $zip" | Out-File -Encoding ASCII $sha
+          Get-Item $zip
+          Get-Content $sha
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: RustVideoPlayer-windows-x64
+          path: |
+            RustVideoPlayer-windows-x64.zip
+            RustVideoPlayer-windows-x64.zip.sha256
+          retention-days: 30
+
+      - name: Create or update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") { $tag = "manual-${{ github.run_number }}" }
+          $notes = @"
+          Rust Video Player Windows x64 build.
+
+          Files:
+          - RustVideoPlayer-windows-x64.zip
+          - RustVideoPlayer-windows-x64.zip.sha256
+
+          Build:
+          - Commit: $env:GITHUB_SHA
+          - GStreamer: $env:GST_VERSION
+          - Runner: windows-2022
+          "@
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag "${env:PACKAGE_NAME}.zip" "${env:PACKAGE_NAME}.zip.sha256" --title $tag --notes $notes
+          } else {
+            gh release upload $tag "${env:PACKAGE_NAME}.zip" "${env:PACKAGE_NAME}.zip.sha256" --clobber
+          }

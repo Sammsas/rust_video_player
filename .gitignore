@@ -1,0 +1,9 @@
+/target
+/dist
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.exp
+gst-registry.bin

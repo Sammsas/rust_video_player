@@ -1,0 +1,17 @@
+[package]
+name = "rust_video_player"
+version = "0.3.2"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1.0"
+gstreamer = "0.22"
+gstreamer-app = "0.22"
+eframe = "0.27"
+egui = "0.27"
+rfd = "0.14"
+url = "2.5"
+
+[build-dependencies]
+winresource = "0.1"
