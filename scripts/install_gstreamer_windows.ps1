@@ -1,9 +1,9 @@
 param(
-    [string]$Version = "1.24.12",
+    [string]$Version = "1.26.8",
     [string]$InstallRoot = "C:\gstreamer\1.0\msvc_x86_64",
     [string]$CacheDir = "C:\downloads",
-    [ValidateSet("Msi", "Exe")]
-    [string]$InstallerKind = "Msi",
+    [ValidateSet("Auto", "Msi", "Exe")]
+    [string]$InstallerKind = "Auto",
     [int]$TimeoutSeconds = 900,
     [switch]$ExportGitHubEnv
 )
@@ -27,10 +27,21 @@ function Add-GitHubPathLine([string]$Line) {
     }
 }
 
-function Invoke-DownloadFile(
-    [string]$Url,
-    [string]$OutFile
-) {
+function Test-RemoteFile([string]$Url) {
+    try {
+        $response = Invoke-WebRequest `
+            -Uri $Url `
+            -Method Head `
+            -UseBasicParsing `
+            -TimeoutSec 60
+
+        return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400)
+    } catch {
+        return $false
+    }
+}
+
+function Invoke-DownloadFile([string]$Url, [string]$OutFile) {
     Write-Host "Downloading:"
     Write-Host "  $Url"
     Write-Host "To:"
@@ -48,7 +59,11 @@ function Invoke-DownloadFile(
         Remove-Item $OutFile -Force
     }
 
-    Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing
+    Invoke-WebRequest `
+        -Uri $Url `
+        -OutFile $OutFile `
+        -UseBasicParsing `
+        -TimeoutSec 300
 
     if (!(Test-Path $OutFile)) {
         throw "Download failed: $OutFile"
@@ -72,7 +87,7 @@ function Wait-ProcessWithTimeout(
     $completed = $Process.WaitForExit($TimeoutSeconds * 1000)
 
     if (-not $completed) {
-        Write-Warning "$NameForLog timed out. Killing process tree..."
+        Write-Warning "$NameForLog timed out. Killing process..."
 
         try {
             Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
@@ -104,6 +119,14 @@ function Install-GStreamerMsi(
     $runtimeUrl = "$baseUrl/gstreamer-1.0-msvc-x86_64-$Version.msi"
     $develUrl = "$baseUrl/gstreamer-1.0-devel-msvc-x86_64-$Version.msi"
 
+    if (!(Test-RemoteFile $runtimeUrl)) {
+        throw "Runtime MSI not found: $runtimeUrl"
+    }
+
+    if (!(Test-RemoteFile $develUrl)) {
+        throw "Development MSI not found: $develUrl"
+    }
+
     $runtimeMsi = Join-Path $CacheDir "gstreamer-runtime-$Version.msi"
     $develMsi = Join-Path $CacheDir "gstreamer-devel-$Version.msi"
 
@@ -120,6 +143,7 @@ function Install-GStreamerMsi(
         "/qn",
         "/norestart",
         "INSTALLDIR=`"$InstallRoot`"",
+        "ADDLOCAL=ALL",
         "/L*v", "`"$runtimeLog`""
     )
 
@@ -141,6 +165,7 @@ function Install-GStreamerMsi(
         "/qn",
         "/norestart",
         "INSTALLDIR=`"$InstallRoot`"",
+        "ADDLOCAL=ALL",
         "/L*v", "`"$develLog`""
     )
 
@@ -168,6 +193,11 @@ function Install-GStreamerExe(
     New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 
     $installerUrl = "https://gstreamer.freedesktop.org/data/pkg/windows/$Version/msvc/gstreamer-1.0-msvc-x86_64-$Version.exe"
+
+    if (!(Test-RemoteFile $installerUrl)) {
+        throw "EXE installer not found: $installerUrl"
+    }
+
     $installerPath = Join-Path $CacheDir "gstreamer-1.0-msvc-x86_64-$Version.exe"
     $installLog = Join-Path $CacheDir "gstreamer-exe-install.log"
 
@@ -196,9 +226,7 @@ function Install-GStreamerExe(
         -NameForLog "GStreamer EXE installer"
 }
 
-function Verify-GStreamer(
-    [string]$InstallRoot
-) {
+function Verify-GStreamer([string]$InstallRoot) {
     Write-Section "Verifying GStreamer"
 
     $GstBin = Join-Path $InstallRoot "bin"
@@ -222,7 +250,6 @@ function Verify-GStreamer(
     $env:GST_PLUGIN_PATH = $GstPluginDir
     $env:GST_PLUGIN_SYSTEM_PATH_1_0 = $GstPluginDir
 
-    # 避免 runner 复用缓存导致 registry 写到奇怪位置
     $registryPath = Join-Path $env:TEMP "gst-registry-actions.bin"
     $env:GST_REGISTRY = $registryPath
 
@@ -232,9 +259,9 @@ function Verify-GStreamer(
     Add-GitHubEnvLine "GST_PLUGIN_SYSTEM_PATH_1_0=$GstPluginDir"
     Add-GitHubEnvLine "GST_REGISTRY=$registryPath"
 
-    Write-Host "Root:    $InstallRoot"
-    Write-Host "Bin:     $GstBin"
-    Write-Host "Plugins: $GstPluginDir"
+    Write-Host "Root:     $InstallRoot"
+    Write-Host "Bin:      $GstBin"
+    Write-Host "Plugins:  $GstPluginDir"
     Write-Host "Registry: $registryPath"
 
     & $GstInspect --version
@@ -261,12 +288,29 @@ if (Test-Path (Join-Path $InstallRoot "bin\gst-inspect-1.0.exe")) {
             -InstallRoot $InstallRoot `
             -CacheDir $CacheDir `
             -TimeoutSeconds $TimeoutSeconds
-    } else {
+    } elseif ($InstallerKind -eq "Exe") {
         Install-GStreamerExe `
             -Version $Version `
             -InstallRoot $InstallRoot `
             -CacheDir $CacheDir `
             -TimeoutSeconds $TimeoutSeconds
+    } else {
+        try {
+            Install-GStreamerMsi `
+                -Version $Version `
+                -InstallRoot $InstallRoot `
+                -CacheDir $CacheDir `
+                -TimeoutSeconds $TimeoutSeconds
+        } catch {
+            Write-Warning "MSI install path failed: $($_.Exception.Message)"
+            Write-Warning "Trying EXE installer..."
+
+            Install-GStreamerExe `
+                -Version $Version `
+                -InstallRoot $InstallRoot `
+                -CacheDir $CacheDir `
+                -TimeoutSeconds $TimeoutSeconds
+        }
     }
 }
 

@@ -11,7 +11,7 @@ on:
       gstreamer_version:
         description: "GStreamer version to install"
         required: false
-        default: "1.24.12"
+        default: "1.26.8"
       create_release:
         description: "Create or update GitHub Release when running manually"
         required: false
@@ -43,7 +43,7 @@ jobs:
         shell: pwsh
         run: |
           $gstVersion = "${{ github.event.inputs.gstreamer_version }}"
-          if ([string]::IsNullOrWhiteSpace($gstVersion)) { $gstVersion = "1.24.12" }
+          if ([string]::IsNullOrWhiteSpace($gstVersion)) { $gstVersion = "1.26.8" }
           $shortSha = $env:GITHUB_SHA.Substring(0, 7)
           "GST_VERSION=$gstVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "SHORT_SHA=$shortSha" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
