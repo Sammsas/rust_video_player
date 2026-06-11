@@ -82,7 +82,7 @@ jobs:
             -InstallRoot "${env:GST_ROOT}" `
             -CacheDir "C:\downloads" `
             -InstallerKind "Msi" `
-            -TimeoutSeconds 900
+            -TimeoutSeconds 1800
 
       - name: Verify GStreamer plugins
         shell: pwsh
